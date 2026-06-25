@@ -27,7 +27,18 @@ function captureWebview(webview, name, folder) {
     console.warn(`${name}: webview 尚未加载，跳过截图`);
     return;
   }
-  ipcRenderer.send('screenshot-webview', { webviewId: webContentsId, name, folder });
+  // 获取完整页面尺寸（含滚动区域）
+  webview.executeJavaScript(`
+    JSON.stringify({
+      w: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+      h: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)
+    })
+  `).then(sizeJson => {
+    const { w, h } = JSON.parse(sizeJson);
+    ipcRenderer.send('screenshot-webview', { webviewId: webContentsId, name, folder, width: w, height: h });
+  }).catch(() => {
+    ipcRenderer.send('screenshot-webview', { webviewId: webContentsId, name, folder });
+  });
 }
 
 function captureAll() {

@@ -17,7 +17,7 @@ function createWindow() {
 }
 
 // 截图 IPC 处理
-ipcMain.on('screenshot-webview', (event, { webviewId, name, folder }) => {
+ipcMain.on('screenshot-webview', (event, { webviewId, name, folder, width, height }) => {
   const wc = webContents.fromId(webviewId);
   if (!wc) return;
 
@@ -27,7 +27,10 @@ ipcMain.on('screenshot-webview', (event, { webviewId, name, folder }) => {
   const filename = `${name}.png`;
   const filepath = path.join(screenshotDir, filename);
 
-  wc.capturePage().then(image => {
+  // 截取完整页面（含滚动区域）
+  const rect = (width && height) ? { x: 0, y: 0, width, height } : undefined;
+
+  wc.capturePage(rect).then(image => {
     fs.writeFileSync(filepath, image.toPNG());
     event.reply('screenshot-saved', { filepath, name, folder });
   }).catch(err => {
