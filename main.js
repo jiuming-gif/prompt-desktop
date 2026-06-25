@@ -17,26 +17,19 @@ function createWindow() {
 }
 
 // 截图 IPC 处理
-ipcMain.on('screenshot-webview', (event, { webviewId, name }) => {
+ipcMain.on('screenshot-webview', (event, { webviewId, name, folder }) => {
   const wc = webContents.fromId(webviewId);
   if (!wc) return;
 
-  const screenshotDir = path.join(__dirname, 'screenshots');
+  const screenshotDir = path.join(__dirname, 'screenshots', folder);
   if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
 
-  const now = new Date();
-  const ts = now.getFullYear().toString() +
-    String(now.getMonth() + 1).padStart(2, '0') +
-    String(now.getDate()).padStart(2, '0') + '_' +
-    String(now.getHours()).padStart(2, '0') +
-    String(now.getMinutes()).padStart(2, '0') +
-    String(now.getSeconds()).padStart(2, '0');
-  const filename = `${name}_${ts}.png`;
+  const filename = `${name}.png`;
   const filepath = path.join(screenshotDir, filename);
 
   wc.capturePage().then(image => {
     fs.writeFileSync(filepath, image.toPNG());
-    event.reply('screenshot-saved', { filepath, name });
+    event.reply('screenshot-saved', { filepath, name, folder });
   }).catch(err => {
     console.error('截图失败:', err.message);
   });

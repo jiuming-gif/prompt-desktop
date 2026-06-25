@@ -8,28 +8,42 @@ const screenshotBtn = document.getElementById('screenshot-btn');
 
 // ============ 截图功能 ============
 
-function captureWebview(webview, name) {
+function newScreenshotFolder() {
+  const now = new Date();
+  const ts = now.getFullYear().toString() +
+    String(now.getMonth() + 1).padStart(2, '0') +
+    String(now.getDate()).padStart(2, '0') + '_' +
+    String(now.getHours()).padStart(2, '0') +
+    String(now.getMinutes()).padStart(2, '0') +
+    String(now.getSeconds()).padStart(2, '0');
+  return ts;
+}
+
+let currentFolder = null;
+
+function captureWebview(webview, name, folder) {
   const webContentsId = webview.getWebContentsId();
   if (!webContentsId) {
     console.warn(`${name}: webview 尚未加载，跳过截图`);
     return;
   }
-  ipcRenderer.send('screenshot-webview', { webviewId: webContentsId, name });
+  ipcRenderer.send('screenshot-webview', { webviewId: webContentsId, name, folder });
 }
 
 function captureAll() {
-  captureWebview(deepseek, 'deepseek');
-  captureWebview(kimi, 'kimi');
-  captureWebview(doubao, 'doubao');
+  const folder = newScreenshotFolder();
+  captureWebview(deepseek, 'deepseek', folder);
+  captureWebview(kimi, 'kimi', folder);
+  captureWebview(doubao, 'doubao', folder);
 }
 
-ipcRenderer.on('screenshot-saved', (event, { filepath, name }) => {
+ipcRenderer.on('screenshot-saved', (event, { filepath, name, folder }) => {
   console.log(`${name} 截图已保存: ${filepath}`);
 });
 
 // ============ 回复完成检测 ============
 
-function watchReplyDone(webview, name) {
+function watchReplyDone(webview, name, folder) {
   const observerJs = `
     (function() {
       if (window.__replyWatcher) return;
@@ -57,7 +71,7 @@ function watchReplyDone(webview, name) {
       if (done) {
         clearInterval(poll);
         webview.executeJavaScript('delete window.__replyDone; delete window.__replyWatcher;').catch(() => {});
-        captureWebview(webview, name);
+        captureWebview(webview, name, folder);
       }
     }).catch(() => {});
   }, 2000);
@@ -67,6 +81,8 @@ function watchReplyDone(webview, name) {
 
 function sendPrompt(prompt) {
   if (!prompt.trim()) return;
+
+  const folder = newScreenshotFolder();
 
   const webviews = [
     { webview: deepseek, name: 'deepseek' },
@@ -78,11 +94,11 @@ function sendPrompt(prompt) {
     if (webview.isLoading()) {
       webview.addEventListener('did-stop-loading', () => {
         injectPrompt(webview, prompt);
-        watchReplyDone(webview, name);
+        watchReplyDone(webview, name, folder);
       }, { once: true });
     } else {
       injectPrompt(webview, prompt);
-      watchReplyDone(webview, name);
+      watchReplyDone(webview, name, folder);
     }
   });
 
