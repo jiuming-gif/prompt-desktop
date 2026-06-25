@@ -66,17 +66,27 @@ function injectPrompt(webview, prompt) {
       }
 
       function simulateEnter(element) {
-        const enterEvent = new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13,
-          which: 13, bubbles: true
-        });
-        element.dispatchEvent(enterEvent);
+        const opts = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true };
+        element.dispatchEvent(new KeyboardEvent('keydown', opts));
+        element.dispatchEvent(new KeyboardEvent('keypress', opts));
+        element.dispatchEvent(new KeyboardEvent('keyup', opts));
+      }
+
+      function clickSendButton() {
+        // 兜底：尝试点击发送按钮
+        const btn = document.querySelector('[class*="send"]') ||
+                    document.querySelector('[aria-label*="发送"]') ||
+                    document.querySelector('button svg')?.closest('button');
+        if (btn) btn.click();
       }
 
       const input = findInput();
       if (input) {
         simulateInput(input.el, prompt);
-        setTimeout(() => simulateEnter(input.el), 300);
+        setTimeout(() => {
+          simulateEnter(input.el);
+          clickSendButton();
+        }, 300);
       } else {
         console.warn('未找到输入框');
       }
