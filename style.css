@@ -100,3 +100,20 @@ html, body {
 #send-btn:hover {
   background: #a0e4f8;
 }
+
+#screenshot-btn {
+  padding: 8px 20px;
+  background: #0f3460;
+  color: #7ec8e3;
+  border: 1px solid #7ec8e3;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+#screenshot-btn:hover {
+  background: #7ec8e3;
+  color: #1a1a2e;
+}

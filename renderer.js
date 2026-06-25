@@ -1,23 +1,88 @@
+const { ipcRenderer } = require('electron');
 const deepseek = document.getElementById('webview-deepseek');
 const kimi = document.getElementById('webview-kimi');
 const doubao = document.getElementById('webview-doubao');
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
+const screenshotBtn = document.getElementById('screenshot-btn');
+
+// ============ 截图功能 ============
+
+function captureWebview(webview, name) {
+  const webContentsId = webview.getWebContentsId();
+  if (!webContentsId) {
+    console.warn(`${name}: webview 尚未加载，跳过截图`);
+    return;
+  }
+  ipcRenderer.send('screenshot-webview', { webviewId: webContentsId, name });
+}
+
+function captureAll() {
+  captureWebview(deepseek, 'deepseek');
+  captureWebview(kimi, 'kimi');
+  captureWebview(doubao, 'doubao');
+}
+
+ipcRenderer.on('screenshot-saved', (event, { filepath, name }) => {
+  console.log(`${name} 截图已保存: ${filepath}`);
+});
+
+// ============ 回复完成检测 ============
+
+function watchReplyDone(webview, name) {
+  const observerJs = `
+    (function() {
+      if (window.__replyWatcher) return;
+      window.__replyWatcher = true;
+      let timer = null;
+      const observer = new MutationObserver(() => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          observer.disconnect();
+          window.__replyDone = true;
+        }, 3000);
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => {
+        observer.disconnect();
+        window.__replyDone = true;
+      }, 120000);
+    })();
+  `;
+
+  webview.executeJavaScript(observerJs).catch(() => {});
+
+  const poll = setInterval(() => {
+    webview.executeJavaScript('window.__replyDone === true').then(done => {
+      if (done) {
+        clearInterval(poll);
+        webview.executeJavaScript('delete window.__replyDone; delete window.__replyWatcher;').catch(() => {});
+        captureWebview(webview, name);
+      }
+    }).catch(() => {});
+  }, 2000);
+}
 
 // ============ 发送逻辑 ============
 
 function sendPrompt(prompt) {
   if (!prompt.trim()) return;
 
-  const webviews = [deepseek, kimi, doubao];
+  const webviews = [
+    { webview: deepseek, name: 'deepseek' },
+    { webview: kimi, name: 'kimi' },
+    { webview: doubao, name: 'doubao' },
+  ];
 
-  webviews.forEach((webview) => {
+  webviews.forEach(({ webview, name }) => {
     if (webview.isLoading()) {
       webview.addEventListener('did-stop-loading', () => {
         injectPrompt(webview, prompt);
+        watchReplyDone(webview, name);
       }, { once: true });
     } else {
       injectPrompt(webview, prompt);
+      watchReplyDone(webview, name);
     }
   });
 
@@ -25,7 +90,6 @@ function sendPrompt(prompt) {
 }
 
 function injectPrompt(webview, prompt) {
-  // 转义特殊字符，防止 JS 注入
   const escaped = prompt.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
 
   const js = `
@@ -73,7 +137,6 @@ function injectPrompt(webview, prompt) {
       }
 
       function clickSendButton() {
-        // 兜底：尝试点击发送按钮
         const btn = document.querySelector('[class*="send"]') ||
                     document.querySelector('[aria-label*="发送"]') ||
                     document.querySelector('button svg')?.closest('button');
@@ -108,6 +171,8 @@ input.addEventListener('keydown', (e) => {
     sendPrompt(input.value);
   }
 });
+
+screenshotBtn.addEventListener('click', captureAll);
 
 // ============ 拖拽分隔条 ============
 
