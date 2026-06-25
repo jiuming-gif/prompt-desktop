@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>三栏 AI 桌面端</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <div class="panels">
+      <div class="panel" id="panel-1">
+        <div class="panel-header">DeepSeek</div>
+        <webview
+          id="webview-deepseek"
+          src="https://chat.deepseek.com"
+          partition="persist:deepseek"
+          allowpopups
+        ></webview>
+      </div>
+
+      <div class="divider" id="divider-1"></div>
+
+      <div class="panel" id="panel-2">
+        <div class="panel-header">Kimi</div>
+        <webview
+          id="webview-kimi"
+          src="https://kimi.moonshot.cn"
+          partition="persist:kimi"
+          allowpopups
+        ></webview>
+      </div>
+
+      <div class="divider" id="divider-2"></div>
+
+      <div class="panel" id="panel-3">
+        <div class="panel-header">豆包</div>
+        <webview
+          id="webview-doubao"
+          src="https://www.doubao.com"
+          partition="persist:doubao"
+          allowpopups
+        ></webview>
+      </div>
+    </div>
+
+    <div class="input-bar">
+      <textarea id="prompt-input" placeholder="输入 prompt，同时发送给三个 AI..." rows="2"></textarea>
+      <button id="send-btn">发送</button>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

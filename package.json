@@ -1,0 +1,13 @@
+{
+  "name": "prompt-desktop",
+  "version": "1.0.0",
+  "description": "三栏 AI 桌面端 - DeepSeek / Kimi / 豆包",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
