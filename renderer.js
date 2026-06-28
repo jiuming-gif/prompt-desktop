@@ -209,17 +209,8 @@ function injectScreenshotJS(webview, siteKey) {
         catch (e) { return []; }
       }
 
-      function commonAncestor(a, b) {
-        if (!a || !b) return a || b;
-        var el = a;
-        while (el) {
-          if (el.contains(b)) return el;
-          el = el.parentElement;
-        }
-        return a;
-      }
-
-      var targetEl = null;
+      var lastUser = null;
+      var lastAI = null;
 
       // Layer 1: 精确定位最新 user + AI 消息
       var userEls = [];
@@ -232,38 +223,72 @@ function injectScreenshotJS(webview, siteKey) {
         aiEls = queryAllSafe(C.aiMsg[i]);
         if (aiEls.length > 0) break;
       }
-      var lastUser = userEls[userEls.length - 1];
-      var lastAI = aiEls[aiEls.length - 1];
+      lastUser = userEls[userEls.length - 1];
+      lastAI = aiEls[aiEls.length - 1];
 
-      if (lastUser && lastAI) {
-        targetEl = commonAncestor(lastUser, lastAI);
+      // 找截图容器：优先聊天列表容器，兜底 main/body
+      var container = null;
+      for (var i = 0; i < C.chatContainer.length; i++) {
+        var c = document.querySelector(C.chatContainer[i]);
+        if (c) { container = c; break; }
       }
+      if (!container) container = document.querySelector('main') || document.body;
 
-      // Layer 2: 模糊兜底
-      if (!targetEl) {
-        for (var i = 0; i < C.chatContainer.length; i++) {
-          var c = document.querySelector(C.chatContainer[i]);
-          if (c) { targetEl = c; break; }
-        }
-        if (!targetEl) targetEl = document.querySelector('main') || document.body;
-      }
-
-      if (!targetEl) {
+      if (!container) {
         window.__shotResult = JSON.stringify({ error: 'no element found' });
         return;
       }
 
-      window.html2canvas(targetEl, {
-        scale: 2,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#ffffff',
-        logging: false,
-      }).then(function(canvas) {
-        window.__shotResult = canvas.toDataURL('image/png');
-      }).catch(function(err) {
-        window.__shotResult = JSON.stringify({ error: err.message });
-      });
+      function doShot() {
+        window.html2canvas(container, {
+          scale: 2,
+          useCORS: true,
+          allowTaint: true,
+          backgroundColor: '#ffffff',
+          logging: false,
+        }).then(function(canvas) {
+          // 如果同时拿到 user 和 AI，裁剪到二者的包围盒
+          if (lastUser && lastAI) {
+            var cr = container.getBoundingClientRect();
+            var ur = lastUser.getBoundingClientRect();
+            var ar = lastAI.getBoundingClientRect();
+            var relTop = Math.min(ur.top, ar.top) - cr.top;
+            var relBottom = Math.max(ur.bottom, ar.bottom) - cr.top;
+            var relLeft = 0; // 宽度取容器全宽，避免截断代码块
+            var relRight = cr.width;
+
+            var scale = 2;
+            var cropW = (relRight - relLeft) * scale;
+            var cropH = (relBottom - relTop) * scale;
+            var cropX = relLeft * scale;
+            var cropY = relTop * scale;
+
+            // 防止越界
+            if (cropX < 0) cropX = 0;
+            if (cropY < 0) cropY = 0;
+            if (cropX + cropW > canvas.width) cropW = canvas.width - cropX;
+            if (cropY + cropH > canvas.height) cropH = canvas.height - cropY;
+            if (cropW <= 0 || cropH <= 0) {
+              window.__shotResult = canvas.toDataURL('image/png');
+              return;
+            }
+
+            var crop = document.createElement('canvas');
+            crop.width = cropW;
+            crop.height = cropH;
+            var ctx = crop.getContext('2d');
+            ctx.drawImage(canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+            window.__shotResult = crop.toDataURL('image/png');
+          } else {
+            // 兜底：全容器截图
+            window.__shotResult = canvas.toDataURL('image/png');
+          }
+        }).catch(function(err) {
+          window.__shotResult = JSON.stringify({ error: err.message });
+        });
+      }
+
+      doShot();
     })();
   `;
 
