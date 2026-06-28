@@ -4,7 +4,7 @@ const path = require('path');
 const deepseek = document.getElementById('webview-deepseek');
 const kimi = document.getElementById('webview-kimi');
 const doubao = document.getElementById('webview-doubao');
-// deepseek/doubao 截图已移除，仅保留 kimi 截图
+// DeepSeek 截图已移除，Kimi + 豆包截图启用
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
 const screenshotBtn = document.getElementById('screenshot-btn');
