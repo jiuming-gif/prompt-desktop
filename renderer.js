@@ -4,7 +4,7 @@ const path = require('path');
 const deepseek = document.getElementById('webview-deepseek');
 const kimi = document.getElementById('webview-kimi');
 const doubao = document.getElementById('webview-doubao');
-// DeepSeek 截图已移除，Kimi + 豆包截图启用
+// DeepSeek / Kimi / 豆包 三站截图启用
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
 const screenshotBtn = document.getElementById('screenshot-btn');
@@ -34,6 +34,15 @@ const SITE = {
       'main',
     ],
     stopTexts: ['停止生成', 'AI 生成中'],
+  },
+  deepseek: {
+    allMsg: ['[class*="ds-message"]'],
+    aiMarker: 'ds-markdown',
+    chatContainer: [
+      '[class*="ds-scroll"]',
+      'main',
+    ],
+    stopTexts: ['停止生成', 'Stop generating'],
   },
 };
 
@@ -73,6 +82,7 @@ function sendPrompt(prompt) {
   const folder = newScreenshotFolder();
   watchReplyDone(kimi, 'kimi', folder);
   watchReplyDone(doubao, 'doubao', folder);
+  watchReplyDone(deepseek, 'deepseek', folder);
 }
 
 function injectPrompt(webview, prompt) {
@@ -193,33 +203,44 @@ function injectScreenshotJS(webview, siteKey) {
       var aiEls = [];
 
       if (C.allMsg) {
-        // 豆包路径：单一选择器匹配所有消息，JS 检查父元素对齐区分 user/AI
         var allEls = [];
         for (var i = 0; i < C.allMsg.length; i++) {
           allEls = queryAllSafe(C.allMsg[i]);
           if (allEls.length > 0) break;
         }
-        for (var i = 0; i < allEls.length; i++) {
-          var el = allEls[i];
-          var p = el;
-          var isUser = false;
-          var found = false;
-          while (p && p !== document.body) {
-            var pCls = p.className;
-            if (typeof pCls === 'string') {
-              if (/\bjustify-end\b/.test(pCls)) { isUser = true; found = true; break; }
-              if (/\bjustify-start\b/.test(pCls)) { isUser = false; found = true; break; }
-            }
-            p = p.parentElement;
+
+        if (C.aiMarker) {
+          // DeepSeek 路径：后代检测 ds-markdown → AI，否则 → 用户
+          for (var i = 0; i < allEls.length; i++) {
+            var el = allEls[i];
+            var hasMarker = !!el.querySelector('[class*="' + C.aiMarker + '"]');
+            if (hasMarker) aiEls.push(el);
+            else userEls.push(el);
           }
-          if (!found) { isUser = false; found = true; }
-          if (found) {
-            if (isUser) userEls.push(el);
-            else aiEls.push(el);
+        } else {
+          // 豆包路径：父元素对齐类检测（justify-end / justify-start）
+          for (var i = 0; i < allEls.length; i++) {
+            var el = allEls[i];
+            var p = el;
+            var isUser = false;
+            var found = false;
+            while (p && p !== document.body) {
+              var pCls = p.className;
+              if (typeof pCls === 'string') {
+                if (/\bjustify-end\b/.test(pCls)) { isUser = true; found = true; break; }
+                if (/\bjustify-start\b/.test(pCls)) { isUser = false; found = true; break; }
+              }
+              p = p.parentElement;
+            }
+            if (!found) { isUser = false; found = true; }
+            if (found) {
+              if (isUser) userEls.push(el);
+              else aiEls.push(el);
+            }
           }
         }
       } else {
-        // Kimi / DeepSeek 路径：CSS 选择器分别匹配 user 和 AI
+        // Kimi 路径：CSS 选择器分别匹配 user 和 AI
         for (var i = 0; i < C.userMsg.length; i++) {
           userEls = queryAllSafe(C.userMsg[i]);
           if (userEls.length > 0) break;
@@ -586,9 +607,11 @@ function diagnoseDOM(webview, siteKey) {
 function captureAll() {
   diagnoseDOM(kimi, 'kimi');
   diagnoseDOM(doubao, 'doubao');
+  diagnoseDOM(deepseek, 'deepseek');
   const folder = newScreenshotFolder();
   captureLatestQA(kimi, 'kimi', folder);
   captureLatestQA(doubao, 'doubao', folder);
+  captureLatestQA(deepseek, 'deepseek', folder);
 }
 
 // ============ 回复完成检测 ============
