@@ -8,7 +8,7 @@
 用户输入 → injectPrompt (webview内填文字+发送)
          → watchReplyDone (MutationObserver + 轮询检测回复完成)
          → captureLatestQA
-              ├── injectScreenshotJS (html2canvas 定位+渲染 → window.__shotResult)
+              ├── injectScreenshotJS (定位 user/AI → 渲染容器 → canvas 裁剪到 QA 包围盒)
               └── pollShotResult (轮询 → 拿到 dataURL → IPC 发 main)
                    └── main.js 收 screenshot-data → 解码 base64 → 写 PNG
 ```
@@ -96,6 +96,24 @@ function commonAncestor(a, b) {
 }
 ```
 
+**Layer 1 结果处理：裁剪到最新 QA 包围盒**
+
+```
+lastUser && lastAI 同时存在时:
+  1. 渲染 chatContainer 全量到 canvas (html2canvas, scale:2)
+  2. 取 lastUser.getBoundingClientRect() 和 lastAI.getBoundingClientRect()
+  3. 计算相对于 container 的包围盒:
+     relTop = min(ur.top, ar.top) - cr.top
+     relBottom = max(ur.bottom, ar.bottom) - cr.top
+     relLeft = 0 (容器全宽，避免截断代码块)
+     relRight = cr.width
+  4. 创建新 crop canvas，ctx.drawImage 裁剪
+  5. crop canvas → toDataURL('image/png')
+
+只有一方匹配或都不匹配:
+  全容器截图（兜底）
+```
+
 **Layer 2 — 兜底（Layer 1 未同时找到 user 和 AI）：**
 
 ```
@@ -107,7 +125,7 @@ function commonAncestor(a, b) {
 ### 4. html2canvas 渲染
 
 ```js
-html2canvas(targetEl, {
+html2canvas(container, {
   scale: 2,              // 2x 高清
   useCORS: true,         // 处理跨域图片（头像）
   allowTaint: true,      // 允许污染 canvas（跨域图）
@@ -219,7 +237,7 @@ ipcRenderer.on('screenshot-error', (event, { name, error }) => {
 - html2canvas 从 `node_modules/html2canvas/dist/html2canvas.min.js` 读入内存
 - 每次截图注入完整 html2canvas UMD ~700KB（当前未做缓存优化）
 - `allowTaint: true` 处理跨域头像，副作用是 canvas 被标记为污染（不影响 PNG 导出）
-- 截图范围：最新一条用户问题 + 最新一条 AI 回复的共同祖先元素
+- 截图范围：最新一条用户问题 + 最新一条 AI 回复的包围盒裁剪（canvas crop）
 
 ## 超时汇总
 
