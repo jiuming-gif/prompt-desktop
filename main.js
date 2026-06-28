@@ -35,6 +35,7 @@ ipcMain.on('show-webview-context-menu', (event, index) => {
 ipcMain.on('screenshot-data', (event, { folder, name, dataURL }) => {
   if (!dataURL || !dataURL.startsWith('data:image/png;base64,')) {
     console.error(`${name}: 无效 dataURL`);
+    event.reply('screenshot-error', { name, error: '无效 dataURL' });
     return;
   }
 
@@ -49,5 +50,6 @@ ipcMain.on('screenshot-data', (event, { folder, name, dataURL }) => {
     event.reply('screenshot-ok', { name, filepath });
   } catch (e) {
     console.error(`${name}: 写文件失败 - ${e.message}`);
+    event.reply('screenshot-error', { name, error: e.message });
   }
 });

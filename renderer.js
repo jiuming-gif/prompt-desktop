@@ -13,17 +13,19 @@ const screenshotBtn = document.getElementById('screenshot-btn');
 const SITE = {
   deepseek: {
     userMsg: [
-      '[class*="ds-markdown"]',
+      '[class*="user-message"]',
+      '[data-author="user"]',
+      '[class*="ds-message-user"]',
     ],
     aiMsg: [
-      '[class*="ds-markdown ds-assistant"]',
       '[class*="ds-assistant-message"]',
+      '[class*="assistant-message"]',
+      '[data-author="assistant"]',
     ],
     chatContainer: [
       '[class*="ds-scroll-area"]',
       'main',
     ],
-    stopTexts: ['停止生成', 'Stop generating'],
   },
   kimi: {
     userMsg: [
@@ -39,7 +41,6 @@ const SITE = {
       '[class*="chat-content-list"]',
       'main',
     ],
-    stopTexts: ['停止生成', 'Stop'],
   },
   doubao: {
     userMsg: [
@@ -54,7 +55,6 @@ const SITE = {
       '[class*="overflow-y-auto"][class*="flow-scrollbar"]',
       'main',
     ],
-    stopTexts: ['停止生成', 'AI 生成中'],
   },
 };
 
@@ -98,11 +98,9 @@ function sendPrompt(prompt) {
 }
 
 function injectPrompt(webview, prompt) {
-  const escaped = prompt.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-
   const js = `
     (function() {
-      const prompt = \`${escaped}\`;
+      const prompt = ${JSON.stringify(prompt)};
 
       function findInput() {
         let el = document.querySelector('[contenteditable="true"]');
@@ -378,7 +376,7 @@ function watchReplyDone(webview, name, folder) {
 
   const poll = setInterval(() => {
     pollCount++;
-    // 超时兜底: 120s / 2s = 60 polls
+    // 超时兜底: 120s + 10s margin, 65 polls * 2s = 130s
     if (pollCount > 65) {
       clearInterval(poll);
       webview.executeJavaScript('delete window.__replyDone; delete window.__replyWatcher; delete window.__replySeenContent;').catch(() => {});
@@ -526,4 +524,8 @@ ipcRenderer.on('open-webview-devtools', (event, index) => {
 
 ipcRenderer.on('screenshot-ok', (event, { name, filepath }) => {
   console.log(`${name} 截图已保存: ${filepath}`);
+});
+
+ipcRenderer.on('screenshot-error', (event, { name, error }) => {
+  console.error(`${name} 截图失败: ${error}`);
 });
