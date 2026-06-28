@@ -32,7 +32,7 @@ doubao: {
 - `[data-message-id]`：语义属性，比 CSS module 类名稳定
 - `chatContainer`：`[class*="message-list"]` 匹配 CSS module 类名
 
-### Bug fix：对齐检测遍历起点
+### Bug fix 1：对齐检测遍历起点
 
 现有 `allMsg` 路径（renderer.js line 195）从 `parentElement` 开始遍历：
 
@@ -44,6 +44,23 @@ var p = el.parentElement;  // bug：跳过元素自身
 
 ```js
 var p = el;
+```
+
+### Bug fix 2：AI 消息无对齐标记的兜底
+
+诊断数据显示豆包 AI 消息 class 为 `relative grid w-full grid-cols-[minmax(0,1fr)_auto]`，既无 `justify-end` 也无 `justify-start`。当前 while 循环只认这两个对齐类，AI 消息遍历到 body 都不会命中 → `found` 保持 false → 消息被丢弃。
+
+修法：while 循环结束后，未命中任何对齐标记的默认当 AI（用户消息有明确 `justify-end` 特征，不匹配的大概率是 AI）：
+
+```js
+if (!found) { isUser = false; found = true; }
+```
+
+完整对齐检测逻辑：
+
+```js
+var p = el;
+var found = false;
 while (p && p !== document.body) {
   var pCls = p.className;
   if (typeof pCls === 'string') {
@@ -52,9 +69,8 @@ while (p && p !== document.body) {
   }
   p = p.parentElement;
 }
+if (!found) { isUser = false; found = true; }
 ```
-
-改动：`var p = el.parentElement` → `var p = el`。
 
 ### 事件流
 
@@ -82,6 +98,7 @@ captureAll()（手动截图按钮）
 | 场景 | 处理 |
 |------|------|
 | `allMsg` 选择器全失效 | Layer 2 兜底：`[class*="message-list"]` → `main` → `body` |
+| AI 消息无 `justify-start` 标记 | 遍历完未命中任何对齐类 → 默认标记为 AI（`isUser=false, found=true`） |
 | 只有用户消息没 AI | `commonAncestor(lastUser, null)` 返回 lastUser，截用户区域 |
 | 只有 AI 没用户 | 反向同理 |
 | 120s 超时无内容 | 放弃截图，不写文件 |
@@ -91,7 +108,7 @@ captureAll()（手动截图按钮）
 
 | 文件 | 改动 |
 |------|------|
-| `renderer.js` | 1. SITE 对象加 `doubao` 配置；2. `allMsg` 路径修 `var p = el`；3. `captureAll()` 加 doubao 调用；4. `sendPrompt()` 加 `watchReplyDone(doubao, ...)` |
+| `renderer.js` | 1. SITE 对象加 `doubao` 配置；2. `allMsg` 路径修遍历起点 + AI 无对齐标记兜底；3. `captureAll()` 加 doubao 调用；4. `sendPrompt()` 加 `watchReplyDone(doubao, ...)` |
 
 不改 `main.js`、`index.html`、`style.css`、`package.json`。
 
