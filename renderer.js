@@ -391,6 +391,13 @@ function diagnoseDOM(webview, siteKey) {
       result.dataAttrs = Array.from(dataSet);
 
       window.__domDiag = JSON.stringify(result);
+
+      // 同时在 webview 内部控制台输出，方便直接查看
+      console.log('%c═══ DOM诊断: ${siteKey} ═══', 'font-weight:bold;font-size:14px;color:#00bcd4;');
+      console.log('class前缀(top30):', result.classPrefixes.join(', '));
+      console.log('文本容器(末尾15):', JSON.stringify(result.textContainers, null, 2));
+      console.log('role属性:', result.roles.join(', ') || '(无)');
+      console.log('data-*属性:', result.dataAttrs.join(', ') || '(无)');
     })();
   `;
 
