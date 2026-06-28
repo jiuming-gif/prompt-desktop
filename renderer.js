@@ -4,6 +4,7 @@ const path = require('path');
 const deepseek = document.getElementById('webview-deepseek');
 const kimi = document.getElementById('webview-kimi');
 const doubao = document.getElementById('webview-doubao');
+// deepseek/doubao 截图已移除，仅保留 kimi 截图
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
 const screenshotBtn = document.getElementById('screenshot-btn');
@@ -11,22 +12,6 @@ const screenshotBtn = document.getElementById('screenshot-btn');
 // ============ 站点选择器（只读，不修改 DOM）============
 
 const SITE = {
-  deepseek: {
-    userMsg: [
-      '[class*="user-message"]',
-      '[data-author="user"]',
-      '[class*="ds-message-user"]',
-    ],
-    aiMsg: [
-      '[class*="ds-assistant-message"]',
-      '[class*="assistant-message"]',
-      '[data-author="assistant"]',
-    ],
-    chatContainer: [
-      '[class*="ds-scroll-area"]',
-      'main',
-    ],
-  },
   kimi: {
     userMsg: [
       '.chat-content-item-user',
@@ -43,20 +28,12 @@ const SITE = {
     ],
   },
   doubao: {
-    userMsg: [
-      '[data-message-id]:not([data-streaming])',
-      '[class*="chat-item"]:not([data-streaming])',
-    ],
-    aiMsg: [
-      '[data-message-id][data-streaming]',
-      '[data-message-id]',
-      '[class*="chat-item"]',
-    ],
+    allMsg: ['[data-message-id]'],
     chatContainer: [
-      '[data-container-type]',
-      '[class*="overflow-y-auto"]',
+      '[class*="message-list"]',
       'main',
     ],
+    stopTexts: ['停止生成', 'AI 生成中'],
   },
 };
 
@@ -94,7 +71,6 @@ function sendPrompt(prompt) {
   input.value = '';
 
   const folder = newScreenshotFolder();
-  watchReplyDone(deepseek, 'deepseek', folder);
   watchReplyDone(kimi, 'kimi', folder);
   watchReplyDone(doubao, 'doubao', folder);
 }
@@ -212,19 +188,69 @@ function injectScreenshotJS(webview, siteKey) {
       var lastUser = null;
       var lastAI = null;
 
-      // Layer 1: 精确定位最新 user + AI 消息
+      // Layer 1: 定位最新 user + AI 消息
       var userEls = [];
       var aiEls = [];
-      for (var i = 0; i < C.userMsg.length; i++) {
-        userEls = queryAllSafe(C.userMsg[i]);
-        if (userEls.length > 0) break;
-      }
-      for (var i = 0; i < C.aiMsg.length; i++) {
-        aiEls = queryAllSafe(C.aiMsg[i]);
-        if (aiEls.length > 0) break;
+
+      if (C.allMsg) {
+        // 豆包路径：单一选择器匹配所有消息，JS 检查父元素对齐区分 user/AI
+        var allEls = [];
+        for (var i = 0; i < C.allMsg.length; i++) {
+          allEls = queryAllSafe(C.allMsg[i]);
+          if (allEls.length > 0) break;
+        }
+        for (var i = 0; i < allEls.length; i++) {
+          var el = allEls[i];
+          var p = el;
+          var isUser = false;
+          var found = false;
+          while (p && p !== document.body) {
+            var pCls = p.className;
+            if (typeof pCls === 'string') {
+              if (/\bjustify-end\b/.test(pCls)) { isUser = true; found = true; break; }
+              if (/\bjustify-start\b/.test(pCls)) { isUser = false; found = true; break; }
+            }
+            p = p.parentElement;
+          }
+          if (!found) { isUser = false; found = true; }
+          if (found) {
+            if (isUser) userEls.push(el);
+            else aiEls.push(el);
+          }
+        }
+      } else {
+        // Kimi / DeepSeek 路径：CSS 选择器分别匹配 user 和 AI
+        for (var i = 0; i < C.userMsg.length; i++) {
+          userEls = queryAllSafe(C.userMsg[i]);
+          if (userEls.length > 0) break;
+        }
+        for (var i = 0; i < C.aiMsg.length; i++) {
+          aiEls = queryAllSafe(C.aiMsg[i]);
+          if (aiEls.length > 0) break;
+        }
       }
       lastUser = userEls[userEls.length - 1];
       lastAI = aiEls[aiEls.length - 1];
+
+      function upgradeToWrapper(el) {
+        if (!el || !el.closest) return el;
+        if (el.hasAttribute && el.hasAttribute("data-message-id")) return el;
+        var w = el.closest("[data-message-id]");
+        if (w) return w;
+        // 兜底：用户消息无 data-message-id，从气泡往上走到 grid 容器
+        if (document.querySelector("[data-message-id]")) {
+          var p = el.parentElement;
+          while (p && p !== document.body) {
+            var cls = p.className || "";
+            if (typeof cls === "string" && cls.indexOf("grid-cols") !== -1) return p;
+            if (p.offsetWidth > 150) return p;
+            p = p.parentElement;
+          }
+        }
+        return el;
+      }
+      lastUser = upgradeToWrapper(lastUser);
+      lastAI = upgradeToWrapper(lastAI);
 
       // 找截图容器：优先聊天列表容器，兜底 main/body
       var container = null;
@@ -234,34 +260,98 @@ function injectScreenshotJS(webview, siteKey) {
       }
       if (!container) container = document.querySelector('main') || document.body;
 
+      // 容器 rect 为 0x0（如 DeepSeek ds-scroll-area display:contents），往上找有尺寸的祖先
+      var cr = container.getBoundingClientRect();
+      if (cr.width === 0 && cr.height === 0) {
+        var p = container.parentElement;
+        while (p && p !== document.documentElement) {
+          var pr = p.getBoundingClientRect();
+          if (pr.width > 0 && pr.height > 0) { container = p; break; }
+          p = p.parentElement;
+        }
+        if (!p) container = document.documentElement;
+      }
+
       if (!container) {
         window.__shotResult = JSON.stringify({ error: 'no element found' });
         return;
       }
 
+      window.__shotDebug = JSON.stringify({
+        site: '${siteKey}',
+        userEls: userEls.length,
+        aiEls: aiEls.length,
+        containerTag: container.tagName,
+        containerCls: (container.className || '').slice(0, 120),
+        containerId: container.id || '',
+        hasAllMsg: !!C.allMsg,
+        lastUserTag: lastUser ? lastUser.tagName : null,
+        lastAITag: lastAI ? lastAI.tagName : null,
+        lastUserCls: lastUser ? (lastUser.className || '').slice(0, 100) : null,
+        lastAICls: lastAI ? (lastAI.className || '').slice(0, 100) : null,
+        lastUserRect: lastUser ? JSON.stringify(lastUser.getBoundingClientRect()) : null,
+        lastAIRect: lastAI ? JSON.stringify(lastAI.getBoundingClientRect()) : null,
+        containerRect: JSON.stringify(container.getBoundingClientRect()),
+        containerScrollTop: container.scrollTop || 0,
+        containerScrollHeight: container.scrollHeight,
+      });
+
       function doShot() {
+        var shotDone = false;
+        // 修复 html2canvas 在 DeepSeek addColorStop 非有限值报错
+        if (!window.__gradientPatched) {
+          window.__gradientPatched = true;
+          var _origAddColorStop = CanvasGradient.prototype.addColorStop;
+          CanvasGradient.prototype.addColorStop = function(offset, color) {
+            if (isFinite(offset)) { _origAddColorStop.call(this, offset, color); }
+          };
+        }
+        // 超大容器降 scale 防 OOM 挂死
+        var shotScale = container.scrollHeight > 6000 ? 1 : 2;
+        // 15s 超时兜底，防止 html2canvas 挂死
+        var timeout = setTimeout(function() {
+          if (!shotDone) { shotDone = true; window.__shotResult = JSON.stringify({ error: 'html2canvas timeout' }); }
+        }, 15000);
+
         window.html2canvas(container, {
-          scale: 2,
+          scale: shotScale,
           useCORS: true,
           allowTaint: true,
           backgroundColor: '#ffffff',
           logging: false,
         }).then(function(canvas) {
+          if (shotDone) return;
+          shotDone = true;
+          clearTimeout(timeout);
           // 如果同时拿到 user 和 AI，裁剪到二者的包围盒
           if (lastUser && lastAI) {
             var cr = container.getBoundingClientRect();
             var ur = lastUser.getBoundingClientRect();
             var ar = lastAI.getBoundingClientRect();
-            var relTop = Math.min(ur.top, ar.top) - cr.top;
-            var relBottom = Math.max(ur.bottom, ar.bottom) - cr.top;
+            var st = container.scrollTop || 0;
+            var PAD = 8; // 上下留白
+            var relTop = Math.min(ur.top, ar.top) - cr.top + st - PAD;
+            var relBottom = Math.max(ur.bottom, ar.bottom) - cr.top + st;
+            // 扩展底部：AI 消息的操作按钮（点赞/复制等）常在 data-message-id 包裹外
+            var wrapper = lastAI.closest ? (lastAI.closest('[data-message-id]') || lastAI) : lastAI;
+            var next = wrapper.nextElementSibling;
+            while (next && !(next.hasAttribute && next.hasAttribute('data-message-id'))) {
+              if (next.querySelector && (next.querySelector('button') || next.querySelector('[role="button"]'))) {
+                var nr = next.getBoundingClientRect();
+                var nBottom = nr.bottom - cr.top + st;
+                if (nBottom > relBottom) relBottom = nBottom;
+                break;
+              }
+              next = next.nextElementSibling;
+            }
+            relBottom += PAD;
             var relLeft = 0; // 宽度取容器全宽，避免截断代码块
             var relRight = cr.width;
 
-            var scale = 2;
-            var cropW = (relRight - relLeft) * scale;
-            var cropH = (relBottom - relTop) * scale;
-            var cropX = relLeft * scale;
-            var cropY = relTop * scale;
+            var cropW = (relRight - relLeft) * shotScale;
+            var cropH = (relBottom - relTop) * shotScale;
+            var cropX = relLeft * shotScale;
+            var cropY = relTop * shotScale;
 
             // 防止越界
             if (cropX < 0) cropX = 0;
@@ -284,6 +374,9 @@ function injectScreenshotJS(webview, siteKey) {
             window.__shotResult = canvas.toDataURL('image/png');
           }
         }).catch(function(err) {
+          if (shotDone) return;
+          shotDone = true;
+          clearTimeout(timeout);
           window.__shotResult = JSON.stringify({ error: err.message });
         });
       }
@@ -316,6 +409,12 @@ function pollShotResult(webview, name, folder, timeoutMs) {
 
       // 清理
       webview.executeJavaScript('delete window.__shotResult;').catch(() => {});
+      webview.executeJavaScript('window.__shotDebug').then(debugRaw => {
+        if (debugRaw) {
+          try { fs.writeFileSync(path.join(__dirname, `.shot-debug-${name}.json`), debugRaw, 'utf-8'); } catch(_) {}
+          webview.executeJavaScript('delete window.__shotDebug;').catch(() => {});
+        }
+      }).catch(() => {});
 
       // 解析结果
       if (typeof result === 'string' && result.startsWith('data:image/png;base64,')) {
@@ -463,6 +562,8 @@ function diagnoseDOM(webview, siteKey) {
         webview.executeJavaScript('delete window.__domDiag;').catch(() => {});
         try {
           const diag = JSON.parse(raw);
+          // 临时：写文件便于调试选择器
+          try { fs.writeFileSync(path.join(__dirname, `.diag-${siteKey}.json`), JSON.stringify(diag, null, 2), 'utf-8'); } catch(_) {}
           console.log(`%c[DOM诊断] ${siteKey}`, 'font-weight:bold;color:#00bcd4;');
           console.log('  class前缀(top30):', diag.classPrefixes.join(', '));
           console.log('  消息元素匹配:', diag.msgSamples);
@@ -483,13 +584,9 @@ function diagnoseDOM(webview, siteKey) {
 // ============ 截图入口 ============
 
 function captureAll() {
-  // 先诊断 DOM 结构，再截图
-  diagnoseDOM(deepseek, 'deepseek');
   diagnoseDOM(kimi, 'kimi');
   diagnoseDOM(doubao, 'doubao');
-
   const folder = newScreenshotFolder();
-  captureLatestQA(deepseek, 'deepseek', folder);
   captureLatestQA(kimi, 'kimi', folder);
   captureLatestQA(doubao, 'doubao', folder);
 }
@@ -529,6 +626,13 @@ function watchReplyDone(webview, name, folder) {
         window.__replySeenContent = true;
         clearTimeout(timer);
         timer = setTimeout(function() {
+          ${config.stopTexts ? `var stopTexts = ${JSON.stringify(config.stopTexts)};
+          var bodyText = document.body.textContent;
+          for (var i = 0; i < stopTexts.length; i++) {
+            if (bodyText.indexOf(stopTexts[i]) !== -1) {
+              return; // 停止按钮还在，等下一次 mutation
+            }
+          }` : ''}
           observer.disconnect();
           clearTimeout(maxWait);
           window.__replyDone = true;
