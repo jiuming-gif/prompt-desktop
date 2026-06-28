@@ -44,20 +44,17 @@ const SITE = {
   },
   doubao: {
     userMsg: [
-      '[class*="user-message"]',
-      '[class*="user-bubble"]',
-      '[data-role="user"]',
-      '[data-author="user"]',
+      '[data-message-id]:not([data-streaming])',
+      '[class*="chat-item"]:not([data-streaming])',
     ],
     aiMsg: [
-      '[class*="assistant-message"]',
-      '[class*="assistant-bubble"]',
-      '[data-role="assistant"]',
-      '[data-author="assistant"]',
+      '[data-message-id][data-streaming]',
+      '[data-message-id]',
+      '[class*="chat-item"]',
     ],
     chatContainer: [
+      '[data-container-type]',
       '[class*="overflow-y-auto"]',
-      '[class*="scroll"]',
       'main',
     ],
   },
@@ -390,11 +387,43 @@ function diagnoseDOM(webview, siteKey) {
       }
       result.dataAttrs = Array.from(dataSet);
 
+      // 找消息类元素结构（匹配常见消息选择器）
+      var msgSels = ['[data-message-id]', '[class*="chat-item"]', '[class*="message"]', '[class*="bubble"]',
+                      '[class*="ds-markdown"]', '[class*="user"]', '[class*="assistant"]',
+                      '[data-author]', '[data-role]'];
+      var msgSamples = [];
+      for (var s = 0; s < msgSels.length; s++) {
+        try {
+          var els = document.querySelectorAll(msgSels[s]);
+          if (els.length > 0) {
+            var samples = [];
+            for (var e = 0; e < Math.min(els.length, 3); e++) {
+              var el = els[e];
+              var allAttrs = [];
+              for (var a = 0; a < el.attributes.length; a++) {
+                allAttrs.push(el.attributes[a].name + '="' + el.attributes[a].value.slice(0, 40) + '"');
+              }
+              samples.push({
+                tag: el.tagName.toLowerCase(),
+                cls: (el.className && typeof el.className === 'string') ? el.className.split(/\\s+/).slice(0, 12).join(' ') : '',
+                attrs: allAttrs.slice(0, 10).join(' | ')
+              });
+            }
+            msgSamples.push({ sel: msgSels[s], count: els.length, samples: samples });
+          }
+        } catch(e) {}
+      }
+      result.msgSamples = msgSamples;
+
       window.__domDiag = JSON.stringify(result);
 
       // 同时在 webview 内部控制台输出，方便直接查看
       console.log('%c═══ DOM诊断: ${siteKey} ═══', 'font-weight:bold;font-size:14px;color:#00bcd4;');
       console.log('class前缀(top30):', result.classPrefixes.join(', '));
+      console.log('消息元素匹配:');
+      msgSamples.forEach(function(m) {
+        console.log('  ' + m.sel + ' → ' + m.count + '个', JSON.stringify(m.samples, null, 2));
+      });
       console.log('文本容器(末尾15):', JSON.stringify(result.textContainers, null, 2));
       console.log('role属性:', result.roles.join(', ') || '(无)');
       console.log('data-*属性:', result.dataAttrs.join(', ') || '(无)');
@@ -411,10 +440,10 @@ function diagnoseDOM(webview, siteKey) {
           const diag = JSON.parse(raw);
           console.log(`%c[DOM诊断] ${siteKey}`, 'font-weight:bold;color:#00bcd4;');
           console.log('  class前缀(top30):', diag.classPrefixes.join(', '));
+          console.log('  消息元素匹配:', diag.msgSamples);
           console.log('  文本容器(末尾15):', diag.textContainers);
           console.log('  role属性:', diag.roles.join(', ') || '(无)');
           console.log('  data-*属性:', diag.dataAttrs.join(', ') || '(无)');
-          console.log('  %c↑ 根据以上信息，找到区分 user/AI 消息的精确选择器，更新 SITE 配置', 'color:#ff9800;');
         } catch (e) {
           console.warn(`${siteKey}: 诊断解析失败 - ${e.message}`);
         }
