@@ -44,15 +44,20 @@ const SITE = {
   },
   doubao: {
     userMsg: [
-      '[class*="bg-g-send"]',
+      '[class*="user-message"]',
       '[class*="user-bubble"]',
+      '[data-role="user"]',
+      '[data-author="user"]',
     ],
     aiMsg: [
-      '[class*="bg-g-receive"]',
-      '[class*="ai-bubble"]',
+      '[class*="assistant-message"]',
+      '[class*="assistant-bubble"]',
+      '[data-role="assistant"]',
+      '[data-author="assistant"]',
     ],
     chatContainer: [
-      '[class*="overflow-y-auto"][class*="flow-scrollbar"]',
+      '[class*="overflow-y-auto"]',
+      '[class*="scroll"]',
       'main',
     ],
   },
@@ -233,7 +238,7 @@ function injectScreenshotJS(webview, siteKey) {
       var lastUser = userEls[userEls.length - 1];
       var lastAI = aiEls[aiEls.length - 1];
 
-      if (lastUser || lastAI) {
+      if (lastUser && lastAI) {
         targetEl = commonAncestor(lastUser, lastAI);
       }
 
