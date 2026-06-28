@@ -28,8 +28,7 @@ const SITE = {
     ],
   },
   doubao: {
-    userMsg: ['[data-message-id][class*="justify-end"]'],
-    aiMsg: ['[data-message-id]:not([class*="justify-end"])'],
+    allMsg: ['[data-message-id], [class*="flex-row"][class*="w-full"][class*="justify-end"]'],
     chatContainer: [
       '[class*="message-list"]',
       'main',
