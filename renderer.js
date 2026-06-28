@@ -323,7 +323,110 @@ function captureLatestQA(webview, name, folder) {
   pollShotResult(webview, name, folder, 30000);
 }
 
+// ============ DOM 诊断：发现真实选择器 ============
+
+function diagnoseDOM(webview, siteKey) {
+  const js = `
+    (function() {
+      var result = { classPrefixes: [], textContainers: [], roles: [], dataAttrs: [] };
+
+      // 收集所有 class 前缀模式（取 - 或 _ 之前的部分）
+      var prefixCount = {};
+      var allEls = document.querySelectorAll('*');
+      for (var i = 0; i < allEls.length; i++) {
+        var cls = allEls[i].className;
+        if (!cls || typeof cls !== 'string') continue;
+        var classes = cls.split(/\\s+/);
+        for (var j = 0; j < classes.length; j++) {
+          var c = classes[j].trim();
+          if (!c || c.length < 2) continue;
+          var prefix = c.match(/^([a-zA-Z]+(-[a-zA-Z]+)?)/);
+          if (prefix) {
+            var p = prefix[1].toLowerCase();
+            prefixCount[p] = (prefixCount[p] || 0) + 1;
+          }
+        }
+      }
+      result.classPrefixes = Object.entries(prefixCount)
+        .filter(function(e) { return e[1] > 3; })
+        .sort(function(a, b) { return b[1] - a[1]; })
+        .slice(0, 30)
+        .map(function(e) { return e[0] + ':' + e[1]; });
+
+      // 找包含大量文本的叶子元素（可能是消息气泡）
+      var textEls = [];
+      for (var i = 0; i < allEls.length; i++) {
+        var el = allEls[i];
+        if (el.children.length > 0) continue;
+        var text = el.textContent.trim();
+        if (text.length > 80) {
+          textEls.push({
+            tag: el.tagName.toLowerCase(),
+            cls: el.className && typeof el.className === 'string' ? el.className.split(/\\s+/).slice(0, 8).join(' ') : '',
+            parentCls: el.parentElement && el.parentElement.className && typeof el.parentElement.className === 'string'
+              ? el.parentElement.className.split(/\\s+/).slice(0, 8).join(' ') : '',
+            textLen: text.length,
+            textPreview: text.slice(0, 60)
+          });
+        }
+      }
+      result.textContainers = textEls.slice(-15);
+
+      // 收集 role 属性
+      var roles = new Set();
+      for (var i = 0; i < allEls.length; i++) {
+        var r = allEls[i].getAttribute('role');
+        if (r) roles.add(r);
+      }
+      result.roles = Array.from(roles);
+
+      // 收集 data-* 属性名
+      var dataSet = new Set();
+      for (var i = 0; i < allEls.length; i++) {
+        var attrs = allEls[i].attributes;
+        for (var j = 0; j < attrs.length; j++) {
+          if (attrs[j].name.startsWith('data-')) dataSet.add(attrs[j].name);
+        }
+      }
+      result.dataAttrs = Array.from(dataSet);
+
+      window.__domDiag = JSON.stringify(result);
+    })();
+  `;
+
+  webview.executeJavaScript(js).then(() => {
+    // 轮询拿结果
+    function pollDiag() {
+      webview.executeJavaScript('window.__domDiag').then(raw => {
+        if (!raw) { setTimeout(pollDiag, 300); return; }
+        webview.executeJavaScript('delete window.__domDiag;').catch(() => {});
+        try {
+          const diag = JSON.parse(raw);
+          console.log(`%c[DOM诊断] ${siteKey}`, 'font-weight:bold;color:#00bcd4;');
+          console.log('  class前缀(top30):', diag.classPrefixes.join(', '));
+          console.log('  文本容器(末尾15):', diag.textContainers);
+          console.log('  role属性:', diag.roles.join(', ') || '(无)');
+          console.log('  data-*属性:', diag.dataAttrs.join(', ') || '(无)');
+          console.log('  %c↑ 根据以上信息，找到区分 user/AI 消息的精确选择器，更新 SITE 配置', 'color:#ff9800;');
+        } catch (e) {
+          console.warn(`${siteKey}: 诊断解析失败 - ${e.message}`);
+        }
+      }).catch(() => { setTimeout(pollDiag, 300); });
+    }
+    setTimeout(pollDiag, 200);
+  }).catch(err => {
+    console.error(`${siteKey}: 诊断注入失败 - ${err.message}`);
+  });
+}
+
+// ============ 截图入口 ============
+
 function captureAll() {
+  // 先诊断 DOM 结构，再截图
+  diagnoseDOM(deepseek, 'deepseek');
+  diagnoseDOM(kimi, 'kimi');
+  diagnoseDOM(doubao, 'doubao');
+
   const folder = newScreenshotFolder();
   captureLatestQA(deepseek, 'deepseek', folder);
   captureLatestQA(kimi, 'kimi', folder);
