@@ -1,4 +1,6 @@
 const { ipcRenderer } = require('electron');
+const fs = require('fs');
+const path = require('path');
 const deepseek = document.getElementById('webview-deepseek');
 const kimi = document.getElementById('webview-kimi');
 const doubao = document.getElementById('webview-doubao');
@@ -6,114 +8,93 @@ const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
 const screenshotBtn = document.getElementById('screenshot-btn');
 
-// ============ 截图功能 ============
+// ============ 站点选择器（只读，不修改 DOM）============
 
-function newScreenshotFolder() {
-  const now = new Date();
-  const ts = now.getFullYear().toString() +
-    String(now.getMonth() + 1).padStart(2, '0') +
-    String(now.getDate()).padStart(2, '0') + '_' +
-    String(now.getHours()).padStart(2, '0') +
-    String(now.getMinutes()).padStart(2, '0') +
-    String(now.getSeconds()).padStart(2, '0');
-  return ts;
-}
+const SITE = {
+  deepseek: {
+    userMsg: [
+      '[class*="ds-markdown"]',
+    ],
+    aiMsg: [
+      '[class*="ds-markdown ds-assistant"]',
+      '[class*="ds-assistant-message"]',
+    ],
+    chatContainer: [
+      '[class*="ds-scroll-area"]',
+      'main',
+    ],
+    stopTexts: ['停止生成', 'Stop generating'],
+  },
+  kimi: {
+    userMsg: [
+      '.chat-content-item-user',
+      '[class*="user-content"]',
+    ],
+    aiMsg: [
+      '.chat-content-item-assistant',
+      '[class*="assistant-content"]',
+    ],
+    chatContainer: [
+      '.chat-content-list',
+      '[class*="chat-content-list"]',
+      'main',
+    ],
+    stopTexts: ['停止生成', 'Stop'],
+  },
+  doubao: {
+    userMsg: [
+      '[class*="bg-g-send"]',
+      '[class*="user-bubble"]',
+    ],
+    aiMsg: [
+      '[class*="bg-g-receive"]',
+      '[class*="ai-bubble"]',
+    ],
+    chatContainer: [
+      '[class*="overflow-y-auto"][class*="flow-scrollbar"]',
+      'main',
+    ],
+    stopTexts: ['停止生成', 'AI 生成中'],
+  },
+};
 
-let currentFolder = null;
+// ============ html2canvas 加载 ============
 
-function captureWebview(webview, name, folder) {
-  const webContentsId = webview.getWebContentsId();
-  if (!webContentsId) {
-    console.warn(`${name}: webview 尚未加载，跳过截图`);
-    return;
+const html2canvasCode = (function() {
+  try {
+    return fs.readFileSync(
+      path.join(__dirname, 'node_modules', 'html2canvas', 'dist', 'html2canvas.min.js'),
+      'utf-8'
+    );
+  } catch (e) {
+    console.error('无法加载 html2canvas:', e.message);
+    return null;
   }
-  // 获取完整页面尺寸（含滚动区域）
-  webview.executeJavaScript(`
-    JSON.stringify({
-      w: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
-      h: Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)
-    })
-  `).then(sizeJson => {
-    const { w, h } = JSON.parse(sizeJson);
-    ipcRenderer.send('screenshot-webview', { webviewId: webContentsId, name, folder, width: w, height: h });
-  }).catch(() => {
-    ipcRenderer.send('screenshot-webview', { webviewId: webContentsId, name, folder });
-  });
-}
-
-function captureAll() {
-  const folder = newScreenshotFolder();
-  captureWebview(deepseek, 'deepseek', folder);
-  captureWebview(kimi, 'kimi', folder);
-  captureWebview(doubao, 'doubao', folder);
-}
-
-ipcRenderer.on('screenshot-saved', (event, { filepath, name, folder }) => {
-  console.log(`${name} 截图已保存: ${filepath}`);
-});
-
-// ============ 回复完成检测 ============
-
-function watchReplyDone(webview, name, folder) {
-  const observerJs = `
-    (function() {
-      if (window.__replyWatcher) return;
-      window.__replyWatcher = true;
-      let timer = null;
-      const observer = new MutationObserver(() => {
-        clearTimeout(timer);
-        timer = setTimeout(() => {
-          observer.disconnect();
-          window.__replyDone = true;
-        }, 3000);
-      });
-      observer.observe(document.body, { childList: true, subtree: true });
-      setTimeout(() => {
-        observer.disconnect();
-        window.__replyDone = true;
-      }, 120000);
-    })();
-  `;
-
-  webview.executeJavaScript(observerJs).catch(() => {});
-
-  const poll = setInterval(() => {
-    webview.executeJavaScript('window.__replyDone === true').then(done => {
-      if (done) {
-        clearInterval(poll);
-        webview.executeJavaScript('delete window.__replyDone; delete window.__replyWatcher;').catch(() => {});
-        captureWebview(webview, name, folder);
-      }
-    }).catch(() => {});
-  }, 2000);
-}
+})();
 
 // ============ 发送逻辑 ============
 
 function sendPrompt(prompt) {
   if (!prompt.trim()) return;
 
-  const folder = newScreenshotFolder();
+  const webviews = [deepseek, kimi, doubao];
 
-  const webviews = [
-    { webview: deepseek, name: 'deepseek' },
-    { webview: kimi, name: 'kimi' },
-    { webview: doubao, name: 'doubao' },
-  ];
-
-  webviews.forEach(({ webview, name }) => {
+  webviews.forEach((webview) => {
     if (webview.isLoading()) {
       webview.addEventListener('did-stop-loading', () => {
         injectPrompt(webview, prompt);
-        watchReplyDone(webview, name, folder);
       }, { once: true });
     } else {
       injectPrompt(webview, prompt);
-      watchReplyDone(webview, name, folder);
     }
   });
 
   input.value = '';
+
+  const folder = newScreenshotFolder();
+  watchReplyDone(deepseek, 'deepseek', folder);
+  watchReplyDone(kimi, 'kimi', folder);
+  watchReplyDone(doubao, 'doubao', folder);
 }
 
 function injectPrompt(webview, prompt) {
@@ -177,8 +158,6 @@ function injectPrompt(webview, prompt) {
           simulateEnter(input.el);
           clickSendButton();
         }, 300);
-      } else {
-        console.warn('未找到输入框');
       }
     })();
   `;
@@ -188,9 +167,263 @@ function injectPrompt(webview, prompt) {
   });
 }
 
+// ============ 截图功能 ============
+
+function newScreenshotFolder() {
+  const now = new Date();
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    '_',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+  ].join('');
+}
+
+function getSiteKey(webview) {
+  if (webview === deepseek) return 'deepseek';
+  if (webview === kimi) return 'kimi';
+  if (webview === doubao) return 'doubao';
+  return null;
+}
+
+// 在 webview 内定位最新问答 + html2canvas 渲染，结果写到 window.__shotResult
+function injectScreenshotJS(webview, siteKey) {
+  const config = SITE[siteKey];
+  if (!html2canvasCode) {
+    console.error(`${siteKey}: html2canvas 未加载`);
+    return;
+  }
+
+  const js = `
+    ${html2canvasCode}
+
+    (function() {
+      var C = ${JSON.stringify(config)};
+
+      // 两层定位：精确 → 模糊兜底
+      function queryAllSafe(sel) {
+        try { return Array.from(document.querySelectorAll(sel)); }
+        catch (e) { return []; }
+      }
+
+      function commonAncestor(a, b) {
+        if (!a || !b) return a || b;
+        var el = a;
+        while (el) {
+          if (el.contains(b)) return el;
+          el = el.parentElement;
+        }
+        return a;
+      }
+
+      var targetEl = null;
+
+      // Layer 1: 精确定位最新 user + AI 消息
+      var userEls = [];
+      var aiEls = [];
+      for (var i = 0; i < C.userMsg.length; i++) {
+        userEls = queryAllSafe(C.userMsg[i]);
+        if (userEls.length > 0) break;
+      }
+      for (var i = 0; i < C.aiMsg.length; i++) {
+        aiEls = queryAllSafe(C.aiMsg[i]);
+        if (aiEls.length > 0) break;
+      }
+      var lastUser = userEls[userEls.length - 1];
+      var lastAI = aiEls[aiEls.length - 1];
+
+      if (lastUser || lastAI) {
+        targetEl = commonAncestor(lastUser, lastAI);
+      }
+
+      // Layer 2: 模糊兜底
+      if (!targetEl) {
+        for (var i = 0; i < C.chatContainer.length; i++) {
+          var c = document.querySelector(C.chatContainer[i]);
+          if (c) { targetEl = c; break; }
+        }
+        if (!targetEl) targetEl = document.querySelector('main') || document.body;
+      }
+
+      if (!targetEl) {
+        window.__shotResult = JSON.stringify({ error: 'no element found' });
+        return;
+      }
+
+      window.html2canvas(targetEl, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+      }).then(function(canvas) {
+        window.__shotResult = canvas.toDataURL('image/png');
+      }).catch(function(err) {
+        window.__shotResult = JSON.stringify({ error: err.message });
+      });
+    })();
+  `;
+
+  webview.executeJavaScript(js).catch(err => {
+    console.error(`${siteKey}: 截图脚本注入失败 - ${err.message}`);
+  });
+}
+
+// 轮询 webview 直到 window.__shotResult 有值
+function pollShotResult(webview, name, folder, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 30000);
+
+  function check() {
+    if (Date.now() > deadline) {
+      console.warn(`${name}: 截图超时`);
+      webview.executeJavaScript('delete window.__shotResult;').catch(() => {});
+      return;
+    }
+
+    webview.executeJavaScript('window.__shotResult').then(result => {
+      if (!result) {
+        setTimeout(check, 500);
+        return;
+      }
+
+      // 清理
+      webview.executeJavaScript('delete window.__shotResult;').catch(() => {});
+
+      // 解析结果
+      if (typeof result === 'string' && result.startsWith('data:image/png;base64,')) {
+        ipcRenderer.send('screenshot-data', { folder, name, dataURL: result });
+      } else {
+        try {
+          const err = JSON.parse(result);
+          console.warn(`${name}: 截图失败 - ${err.error}`);
+        } catch (e) {
+          console.warn(`${name}: 未知截图结果`);
+        }
+      }
+    }).catch(() => {
+      setTimeout(check, 500);
+    });
+  }
+
+  setTimeout(check, 200); // 首轮等 html2canvas 开始渲染
+}
+
+// 完整的截图流程：注入 → 轮询 → 等结果
+function captureLatestQA(webview, name, folder) {
+  const siteKey = getSiteKey(webview);
+  if (!siteKey) return;
+
+  injectScreenshotJS(webview, siteKey);
+  pollShotResult(webview, name, folder, 30000);
+}
+
+function captureAll() {
+  const folder = newScreenshotFolder();
+  captureLatestQA(deepseek, 'deepseek', folder);
+  captureLatestQA(kimi, 'kimi', folder);
+  captureLatestQA(doubao, 'doubao', folder);
+}
+
+// ============ 回复完成检测 ============
+
+function watchReplyDone(webview, name, folder) {
+  const siteKey = getSiteKey(webview);
+  const config = SITE[siteKey];
+  if (!config) return;
+
+  webview.executeJavaScript(`
+    (function() {
+      if (window.__replyWatcher) return;
+      window.__replyWatcher = true;
+      window.__replySeenContent = false;
+      window.__replyTextLen = 0;
+      window.__replyStableCount = 0;
+
+      var timer = null;
+      var maxWait = setTimeout(function() {
+        // 超时兜底：有内容才截图
+        window.__replyDone = true;
+        window.__replyTimedOut = true;
+      }, 120000);
+
+      // 找聊天容器
+      var conv = null;
+      var convSels = ${JSON.stringify(config.chatContainer)};
+      for (var i = 0; i < convSels.length; i++) {
+        var c = document.querySelector(convSels[i]);
+        if (c) { conv = c; break; }
+      }
+      if (!conv) conv = document.body;
+
+      var observer = new MutationObserver(function() {
+        window.__replySeenContent = true;
+        clearTimeout(timer);
+        timer = setTimeout(function() {
+          observer.disconnect();
+          clearTimeout(maxWait);
+          window.__replyDone = true;
+        }, 3000);
+      });
+      observer.observe(conv, { childList: true, subtree: true, characterData: true });
+    })();
+  `).catch(() => {});
+
+  // 轮询检测
+  let prevTextLen = -1;
+  let stableCount = 0;
+  let pollCount = 0;
+
+  const poll = setInterval(() => {
+    pollCount++;
+    // 超时兜底: 120s / 2s = 60 polls
+    if (pollCount > 65) {
+      clearInterval(poll);
+      webview.executeJavaScript('delete window.__replyDone; delete window.__replyWatcher; delete window.__replySeenContent;').catch(() => {});
+      return;
+    }
+
+    webview.executeJavaScript(`
+      JSON.stringify({
+        done: window.__replyDone === true,
+        timedOut: window.__replyTimedOut === true,
+        seenContent: window.__replySeenContent === true,
+        textLen: (document.querySelector('${config.chatContainer[0]}') || document.body).textContent.length
+      })
+    `).then(raw => {
+      const state = JSON.parse(raw);
+
+      // 确认有过内容输出
+      if (!state.seenContent && !state.timedOut) return;
+
+      // 文字长度稳定检测：连续 2 次不变
+      if (state.textLen === prevTextLen && state.textLen > 0) {
+        stableCount++;
+      } else {
+        stableCount = 0;
+      }
+      prevTextLen = state.textLen;
+
+      // 触发条件：done + 文字稳定
+      const done = state.done && stableCount >= 2;
+      // 或超时但有内容
+      const timedOutWithContent = state.timedOut && state.textLen > 0;
+
+      if (done || timedOutWithContent) {
+        clearInterval(poll);
+        webview.executeJavaScript('delete window.__replyDone; delete window.__replyTimedOut; delete window.__replyWatcher; delete window.__replySeenContent; delete window.__replyTextLen; delete window.__replyStableCount;').catch(() => {});
+        setTimeout(() => captureLatestQA(webview, name, folder), 1000);
+      }
+    }).catch(() => {});
+  }, 2000);
+}
+
 // ============ 事件绑定 ============
 
 sendBtn.addEventListener('click', () => sendPrompt(input.value));
+screenshotBtn.addEventListener('click', captureAll);
 
 input.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -199,7 +432,14 @@ input.addEventListener('keydown', (e) => {
   }
 });
 
-screenshotBtn.addEventListener('click', captureAll);
+// ============ 面板标题双击开 DevTools ============
+
+document.querySelectorAll('.panel-header').forEach((header, i) => {
+  header.addEventListener('dblclick', () => {
+    const map = [deepseek, kimi, doubao];
+    if (map[i]) map[i].openDevTools();
+  });
+});
 
 // ============ 拖拽分隔条 ============
 
@@ -250,4 +490,40 @@ document.addEventListener('mouseup', () => {
   if (dragDivider) dragDivider.classList.remove('active');
   document.body.style.cursor = '';
   document.body.style.userSelect = '';
+});
+
+// ============ webview 事件 ============
+
+[deepseek, kimi, doubao].forEach((wv, i) => {
+  wv.addEventListener('context-menu', (e) => {
+    e.preventDefault();
+    ipcRenderer.send('show-webview-context-menu', i);
+  });
+});
+
+// 监控 webview 加载失败
+const wvNames = ['deepseek', 'kimi', 'doubao'];
+[deepseek, kimi, doubao].forEach((wv, i) => {
+  wv.addEventListener('did-fail-load', (e) => {
+    if (e.errorCode !== -3) {
+      console.error(`${wvNames[i]} 加载失败: code=${e.errorCode} desc="${e.errorDescription}" url=${e.validatedURL}`);
+    }
+  });
+  wv.addEventListener('crashed', () => {
+    console.error(`${wvNames[i]} webview 崩溃，正在重载...`);
+    wv.reload();
+  });
+  wv.addEventListener('console-message', (e) => {
+    if (e.level >= 2) {
+      console.log(`[${wvNames[i]}] ${e.message}`);
+    }
+  });
+});
+
+ipcRenderer.on('open-webview-devtools', (event, index) => {
+  [deepseek, kimi, doubao][index].openDevTools();
+});
+
+ipcRenderer.on('screenshot-ok', (event, { name, filepath }) => {
+  console.log(`${name} 截图已保存: ${filepath}`);
 });
