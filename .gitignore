@@ -3,3 +3,8 @@ dist/
 .env
 *.log
 screenshots/
+.diag-*.json
+.shot-debug-*.json
+.playwright-mcp/
+docs/superpowers/
+.claude/

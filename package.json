@@ -6,8 +6,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "build": "electron-builder --win portable",
-    "build:installer": "electron-builder --win nsis"
+    "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false&& set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& electron-builder --win nsis",
+    "build:portable": "set CSC_IDENTITY_AUTO_DISCOVERY=false&& set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& electron-builder --win portable"
   },
   "build": {
     "appId": "com.prompt.desktop",
@@ -19,19 +19,25 @@
       "main.js",
       "index.html",
       "renderer.js",
-      "style.css",
-      "node_modules/**/*"
+      "style.css"
     ],
+    "compression": "maximum",
+    "asar": true,
     "win": {
       "target": [
         {
-          "target": "portable",
+          "target": "nsis",
           "arch": [
             "x64"
           ]
         }
       ],
       "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
     },
     "portable": {
       "artifactName": "PromptDesktop-${version}-portable.${ext}"

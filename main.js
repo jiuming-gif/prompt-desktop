@@ -39,7 +39,8 @@ ipcMain.on('screenshot-data', (event, { folder, name, dataURL }) => {
     return;
   }
 
-  const dir = path.join(__dirname, 'screenshots', folder);
+  const base = app.isPackaged ? path.dirname(app.getPath('exe')) : __dirname;
+  const dir = path.join(base, 'PromptDesktop截图', folder);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   const filepath = path.join(dir, `${name}.png`);
@@ -52,4 +53,14 @@ ipcMain.on('screenshot-data', (event, { folder, name, dataURL }) => {
     console.error(`${name}: 写文件失败 - ${e.message}`);
     event.reply('screenshot-error', { name, error: e.message });
   }
+});
+
+// ============ 调试文件写入（renderer 通过 IPC 请求 main process 写盘）============
+
+ipcMain.on('write-debug-file', (event, { name, data }) => {
+  const dir = path.join(app.getPath('userData'), 'debug');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.writeFileSync(path.join(dir, name), data, 'utf-8');
+  } catch (_) {}
 });

@@ -4,7 +4,6 @@ const path = require('path');
 const deepseek = document.getElementById('webview-deepseek');
 const kimi = document.getElementById('webview-kimi');
 const doubao = document.getElementById('webview-doubao');
-// DeepSeek / Kimi / 豆包 三站截图启用
 const input = document.getElementById('prompt-input');
 const sendBtn = document.getElementById('send-btn');
 const screenshotBtn = document.getElementById('screenshot-btn');
@@ -28,21 +27,29 @@ const SITE = {
     ],
   },
   doubao: {
-    allMsg: ['[data-message-id], [class*="flex-row"][class*="w-full"][class*="justify-end"]'],
+    userMsg: [
+      '[class*="flex-row"][class*="w-full"][class*="justify-end"]:not([class*="message-action-bar"])',
+    ],
+    aiMsg: [
+      '[data-message-id]',
+    ],
     chatContainer: [
       '[class*="message-list"]',
       'main',
     ],
-    stopTexts: ['停止生成', 'AI 生成中'],
   },
   deepseek: {
-    allMsg: ['[class*="ds-message"]'],
-    aiMarker: 'ds-markdown',
+    userMsg: [
+      '[class*="ds-message"]:not(:has([class*="ds-markdown"]))',
+    ],
+    aiMsg: [
+      '[class*="ds-message"]:has([class*="ds-markdown"])',
+      '[class*="ds-markdown"]',
+    ],
     chatContainer: [
       '[class*="ds-scroll"]',
       'main',
     ],
-    stopTexts: ['停止生成', 'Stop generating'],
   },
 };
 
@@ -50,10 +57,20 @@ const SITE = {
 
 const html2canvasCode = (function() {
   try {
-    return fs.readFileSync(
+    let code = fs.readFileSync(
       path.join(__dirname, 'node_modules', 'html2canvas', 'dist', 'html2canvas.min.js'),
       'utf-8'
     );
+    // 修复 html2canvas v1.4.1 parseComponentValues bug:
+    // consumeComponentValue 可能返回 undefined，导致 e.type 崩溃
+    var patched = code.replace(
+      /parseComponentValues=function\(\)\{for\(var (\w)=\[\];;\)\{var (\w)=this\.consumeComponentValue\(\);if\(32===\2\.type\)return \1;\1\.push\(\2\),\1\.push\(\)\}\}/g,
+      'parseComponentValues=function(){for(var $1=[];;){var $2=this.consumeComponentValue();if(!$2||32===$2.type)return $1;$1.push($2)}}'
+    );
+    if (patched === code) {
+      console.warn('html2canvas: parseComponentValues patch did not match — html2canvas may have upgraded');
+    }
+    return patched;
   } catch (e) {
     console.error('无法加载 html2canvas:', e.message);
     return null;
@@ -78,11 +95,6 @@ function sendPrompt(prompt) {
   });
 
   input.value = '';
-
-  const folder = newScreenshotFolder();
-  watchReplyDone(kimi, 'kimi', folder);
-  watchReplyDone(doubao, 'doubao', folder);
-  watchReplyDone(deepseek, 'deepseek', folder);
 }
 
 function injectPrompt(webview, prompt) {
@@ -189,6 +201,17 @@ function injectScreenshotJS(webview, siteKey) {
     (function() {
       var C = ${JSON.stringify(config)};
 
+      // 虚拟滚动：先滚到底确保最新消息在 DOM 中
+      for (var _si = 0; _si < C.chatContainer.length; _si++) {
+        var _sc = document.querySelector(C.chatContainer[_si]);
+        if (_sc && _sc.scrollHeight > _sc.clientHeight + 50) {
+          _sc.scrollTop = _sc.scrollHeight;
+          break;
+        }
+      }
+
+      setTimeout(function() {
+
       // 两层定位：精确 → 模糊兜底
       function queryAllSafe(sel) {
         try { return Array.from(document.querySelectorAll(sel)); }
@@ -202,88 +225,120 @@ function injectScreenshotJS(webview, siteKey) {
       var userEls = [];
       var aiEls = [];
 
-      if (C.allMsg) {
-        var allEls = [];
-        for (var i = 0; i < C.allMsg.length; i++) {
-          allEls = queryAllSafe(C.allMsg[i]);
-          if (allEls.length > 0) break;
-        }
-
-        if (C.aiMarker) {
-          // DeepSeek 路径：后代检测 ds-markdown → AI，否则 → 用户
-          for (var i = 0; i < allEls.length; i++) {
-            var el = allEls[i];
-            var hasMarker = !!el.querySelector('[class*="' + C.aiMarker + '"]');
-            if (hasMarker) aiEls.push(el);
-            else userEls.push(el);
-          }
-        } else {
-          // 豆包路径：父元素对齐类检测（justify-end / justify-start）
-          for (var i = 0; i < allEls.length; i++) {
-            var el = allEls[i];
-            var p = el;
-            var isUser = false;
-            var found = false;
-            while (p && p !== document.body) {
-              var pCls = p.className;
-              if (typeof pCls === 'string') {
-                if (/\bjustify-end\b/.test(pCls)) { isUser = true; found = true; break; }
-                if (/\bjustify-start\b/.test(pCls)) { isUser = false; found = true; break; }
-              }
-              p = p.parentElement;
-            }
-            if (!found) { isUser = false; found = true; }
-            if (found) {
-              if (isUser) userEls.push(el);
-              else aiEls.push(el);
-            }
-          }
-        }
-      } else {
-        // Kimi 路径：CSS 选择器分别匹配 user 和 AI
-        for (var i = 0; i < C.userMsg.length; i++) {
-          userEls = queryAllSafe(C.userMsg[i]);
-          if (userEls.length > 0) break;
-        }
-        for (var i = 0; i < C.aiMsg.length; i++) {
-          aiEls = queryAllSafe(C.aiMsg[i]);
-          if (aiEls.length > 0) break;
-        }
+      for (var i = 0; i < C.userMsg.length; i++) {
+        userEls = queryAllSafe(C.userMsg[i]);
+        if (userEls.length > 0) break;
       }
+      for (var i = 0; i < C.aiMsg.length; i++) {
+        aiEls = queryAllSafe(C.aiMsg[i]);
+        if (aiEls.length > 0) break;
+      }
+
+      // 过滤不可见元素（opacity-0 / pointer-events-none 占位 spacer 等）
+      function isMessageVisible(el) {
+        if (!el) return false;
+        var r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+        // className 检测 spacer 模式：同时含 opacity-0 + pointer-events-none
+        var cls = el.className || '';
+        if (typeof cls === 'string') {
+          if (cls.indexOf('opacity-0') !== -1 && cls.indexOf('pointer-events-none') !== -1) return false;
+        }
+        var cs = window.getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+        if (cs.opacity === '0') return false;
+        return true;
+      }
+      userEls = userEls.filter(isMessageVisible);
+      aiEls = aiEls.filter(isMessageVisible);
+
+      var firstUser = userEls[0];
+      var firstAI = aiEls[0];
       lastUser = userEls[userEls.length - 1];
       lastAI = aiEls[aiEls.length - 1];
 
+      var _hasDataMsgId = !!document.querySelector("[data-message-id]");
       function upgradeToWrapper(el) {
         if (!el || !el.closest) return el;
         if (el.hasAttribute && el.hasAttribute("data-message-id")) return el;
         var w = el.closest("[data-message-id]");
         if (w) return w;
-        // 兜底：用户消息无 data-message-id，从气泡往上走到 grid 容器
-        if (document.querySelector("[data-message-id]")) {
+        if (el.hasAttribute && el.hasAttribute("data-streaming")) return el;
+        if (el.hasAttribute && el.hasAttribute("data-observe-row")) return el;
+        // ds-markdown 需提升到父级 ds-message（DeepSeek fallback selector 命中内容层）
+        var uCls = el.className || '';
+        if (typeof uCls === 'string' && uCls.indexOf('ds-markdown') !== -1 && uCls.indexOf('ds-message') === -1) {
+          var mp = el.closest('[class*="ds-message"]');
+          if (mp) return mp;
+        }
+        // 兜底：用户消息无 data-message-id（豆包等），先走父级 grid/max-w 检测
+        if (_hasDataMsgId) {
           var p = el.parentElement;
           while (p && p !== document.body) {
             var cls = p.className || "";
-            if (typeof cls === "string" && cls.indexOf("grid-cols") !== -1) return p;
-            if (p.offsetWidth > 150) return p;
+            if (typeof cls === "string") {
+              if (cls.indexOf("grid-cols") !== -1) return p;
+              if (cls.indexOf("max-w-") !== -1 && cls.indexOf("max-w-full") === -1) return p;
+            }
+            if (p.offsetWidth > 150 && p.offsetHeight > 0) return p;
             p = p.parentElement;
           }
         }
+        // 自身够大且无 data-message-id 体系 → 直接用
+        if (el.offsetWidth > 150 && el.offsetHeight > 0) return el;
         return el;
       }
+      firstUser = upgradeToWrapper(firstUser);
+      firstAI = upgradeToWrapper(firstAI);
       lastUser = upgradeToWrapper(lastUser);
       lastAI = upgradeToWrapper(lastAI);
 
-      // 找截图容器：优先聊天列表容器，兜底 main/body
+      // 找截图容器：优先 LCA，若 LCA 结果是视口级 wrapper 则改用 chatContainer，兜底 main/body
       var container = null;
-      for (var i = 0; i < C.chatContainer.length; i++) {
-        var c = document.querySelector(C.chatContainer[i]);
-        if (c) { container = c; break; }
-      }
-      if (!container) container = document.querySelector('main') || document.body;
 
-      // 容器 rect 为 0x0（如 DeepSeek ds-scroll-area display:contents），往上找有尺寸的祖先
+      function findLCA(a, b) {
+        if (!a || !b) return null;
+        var path = [];
+        var n = a;
+        while (n) { path.push(n); n = n.parentElement; }
+        n = b;
+        while (n) {
+          if (path.indexOf(n) !== -1) {
+            var r = n.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return n;
+          }
+          n = n.parentElement;
+        }
+        return null;
+      }
+
+      if (firstUser && lastAI) {
+        container = findLCA(firstUser, lastAI);
+      }
+
+      // LCA 可能走到视口级 wrapper（scrollHeight ≈ viewport → 不是真正的滚动容器），
+      // 改用 chatContainer CSS 选择器获取真实内容高度。
+      if (container && container.scrollHeight <= window.innerHeight * 1.1) { // 1.1× 容忍浮点误差
+        for (var i = 0; i < C.chatContainer.length; i++) {
+          var c = document.querySelector(C.chatContainer[i]);
+          if (c && c.scrollHeight > container.scrollHeight * 1.2) { // 显著更高才是真滚动容器
+            container = c;
+            break;
+          }
+        }
+      }
+
+      if (!container) {
+        for (var i = 0; i < C.chatContainer.length; i++) {
+          var c = document.querySelector(C.chatContainer[i]);
+          if (c) { container = c; break; }
+        }
+        if (!container) container = document.querySelector('main') || document.body;
+      }
+
+      // 容器 rect 为 0x0（如 display:contents），往上找有尺寸的祖先
       var cr = container.getBoundingClientRect();
-      if (cr.width === 0 && cr.height === 0) {
+      if (cr.width === 0 || cr.height === 0) {
         var p = container.parentElement;
         while (p && p !== document.documentElement) {
           var pr = p.getBoundingClientRect();
@@ -298,6 +353,60 @@ function injectScreenshotJS(webview, siteKey) {
         return;
       }
 
+      // 精炼容器：优先用含有消息的子元素，防 LCA 走到全局包裹层
+      if (firstUser && lastAI) {
+        var fur2 = firstUser.getBoundingClientRect();
+        var lar2 = lastAI.getBoundingClientRect();
+        var contentSpan = lar2.bottom - fur2.top;
+        var cbr2 = container.getBoundingClientRect();
+
+        // 消息溢出容器（如用户消息 position:absolute 跑到容器上方）→ 往上找包含祖先
+        if (fur2.top < cbr2.top - 4 || lar2.bottom > cbr2.bottom + 4) {
+          var p = container.parentElement;
+          while (p && p !== document.documentElement) {
+            var pr = p.getBoundingClientRect();
+            if (pr.top <= fur2.top + 2 && pr.bottom >= lar2.bottom - 2) {
+              container = p;
+              cbr2 = pr;
+              break;
+            }
+            p = p.parentElement;
+          }
+        }
+
+        // 消息内容远大于容器高度 → 虚拟滚动，找内部滚动容器
+        if (contentSpan > container.scrollHeight * 1.3) { // 1.3× 阈值防误判
+          var children = container.children;
+          for (var k = 0; k < children.length; k++) {
+            if (children[k].scrollHeight > container.scrollHeight * 1.2) { // 子元素显著更高 → 真滚动容器
+              container = children[k];
+              break;
+            }
+          }
+          if (container.scrollHeight < contentSpan * 0.8) { // 仍远小于消息跨度 → 继续找
+            var wrappers = container.querySelectorAll('[class*="virtual"], [class*="inner"], [class*="message-list"], [class*="chat-list"], [class*="list"]');
+            for (var w = 0; w < wrappers.length; w++) {
+              if (wrappers[w].scrollHeight > container.scrollHeight * 1.2) { // 显著更高 → 真滚动容器
+                container = wrappers[w];
+                break;
+              }
+            }
+          }
+        }
+        // 容器在视口顶部且占满视口 → 可能是 body 级包裹层，往下找更聚焦的子元素
+        cbr2 = container.getBoundingClientRect();
+        if (cbr2.top <= 2 && cbr2.height >= window.innerHeight * 0.9 && container.children.length <= 3) { // 占满视口的 body 级包裹层
+          for (var k = 0; k < container.children.length; k++) {
+            var childRect = container.children[k].getBoundingClientRect();
+            var childContainsUser = childRect.top <= fur2.top && childRect.bottom >= fur2.bottom;
+            if (childContainsUser && childRect.height > 100) {
+              container = container.children[k];
+              break;
+            }
+          }
+        }
+      }
+
       window.__shotDebug = JSON.stringify({
         site: '${siteKey}',
         userEls: userEls.length,
@@ -305,19 +414,27 @@ function injectScreenshotJS(webview, siteKey) {
         containerTag: container.tagName,
         containerCls: (container.className || '').slice(0, 120),
         containerId: container.id || '',
-        hasAllMsg: !!C.allMsg,
+        firstUserTag: firstUser ? firstUser.tagName : null,
+        firstAITag: firstAI ? firstAI.tagName : null,
         lastUserTag: lastUser ? lastUser.tagName : null,
         lastAITag: lastAI ? lastAI.tagName : null,
         lastUserCls: lastUser ? (lastUser.className || '').slice(0, 100) : null,
         lastAICls: lastAI ? (lastAI.className || '').slice(0, 100) : null,
+        firstUserRect: firstUser ? JSON.stringify(firstUser.getBoundingClientRect()) : null,
+        firstAIRect: firstAI ? JSON.stringify(firstAI.getBoundingClientRect()) : null,
         lastUserRect: lastUser ? JSON.stringify(lastUser.getBoundingClientRect()) : null,
         lastAIRect: lastAI ? JSON.stringify(lastAI.getBoundingClientRect()) : null,
         containerRect: JSON.stringify(container.getBoundingClientRect()),
         containerScrollTop: container.scrollTop || 0,
         containerScrollHeight: container.scrollHeight,
+        lastAI_scrollHeight: lastAI ? lastAI.scrollHeight : null,
+        lastAI_childCount: lastAI ? lastAI.children.length : null,
+        lastAI_textLen: lastAI ? (lastAI.textContent || '').length : null,
       });
 
       function doShot() {
+        if (window.__shotInProgress) return;
+        window.__shotInProgress = true;
         var shotDone = false;
         // 修复 html2canvas 在 DeepSeek addColorStop 非有限值报错
         if (!window.__gradientPatched) {
@@ -334,6 +451,31 @@ function injectScreenshotJS(webview, siteKey) {
           if (!shotDone) { shotDone = true; window.__shotResult = JSON.stringify({ error: 'html2canvas timeout' }); }
         }, 15000);
 
+        // 容器扩展：当消息内容超出容器 bounds 时，临时撑开容器防止 html2canvas 裁剪
+        var _cssBackup = {};
+        if (firstUser && lastAI) {
+          var _allEls = userEls.concat(aiEls);
+          var _minY = Infinity, _maxY = -Infinity;
+          for (var _t = 0; _t < _allEls.length; _t++) {
+            var _r = _allEls[_t].getBoundingClientRect();
+            if (_r.top < _minY) _minY = _r.top;
+            if (_r.bottom > _maxY) _maxY = _r.bottom;
+          }
+          var _cbr = container.getBoundingClientRect();
+          if (_minY < _cbr.top - 8 || _maxY > _cbr.bottom + 8) {
+            _cssBackup.overflow = container.style.overflow;
+            _cssBackup.height = container.style.height;
+            container.style.overflow = 'visible';
+            container.style.height = Math.max(_cbr.height, container.scrollHeight + 16) + 'px';
+          }
+        }
+
+        function restoreContainer() {
+          if (_cssBackup.overflow !== undefined) container.style.overflow = _cssBackup.overflow;
+          if (_cssBackup.height !== undefined) container.style.height = _cssBackup.height;
+          window.__shotInProgress = false;
+        }
+
         window.html2canvas(container, {
           scale: shotScale,
           useCORS: true,
@@ -344,7 +486,8 @@ function injectScreenshotJS(webview, siteKey) {
           if (shotDone) return;
           shotDone = true;
           clearTimeout(timeout);
-          // 如果同时拿到 user 和 AI，裁剪到二者的包围盒
+          restoreContainer();
+          // 裁剪到对话包围盒（fullConversation 则全对话，否则最新一对）
           if (lastUser && lastAI) {
             var cr = container.getBoundingClientRect();
             var ur = lastUser.getBoundingClientRect();
@@ -361,7 +504,6 @@ function injectScreenshotJS(webview, siteKey) {
                 var nr = next.getBoundingClientRect();
                 var nBottom = nr.bottom - cr.top + st;
                 if (nBottom > relBottom) relBottom = nBottom;
-                break;
               }
               next = next.nextElementSibling;
             }
@@ -398,12 +540,13 @@ function injectScreenshotJS(webview, siteKey) {
           if (shotDone) return;
           shotDone = true;
           clearTimeout(timeout);
+          restoreContainer();
           window.__shotResult = JSON.stringify({ error: err.message });
         });
       }
 
       doShot();
-    })();
+      }, 350); })();
   `;
 
   webview.executeJavaScript(js).catch(err => {
@@ -432,7 +575,7 @@ function pollShotResult(webview, name, folder, timeoutMs) {
       webview.executeJavaScript('delete window.__shotResult;').catch(() => {});
       webview.executeJavaScript('window.__shotDebug').then(debugRaw => {
         if (debugRaw) {
-          try { fs.writeFileSync(path.join(__dirname, `.shot-debug-${name}.json`), debugRaw, 'utf-8'); } catch(_) {}
+          ipcRenderer.send('write-debug-file', { name: `shot-debug-${name}.json`, data: debugRaw });
           webview.executeJavaScript('delete window.__shotDebug;').catch(() => {});
         }
       }).catch(() => {});
@@ -584,7 +727,7 @@ function diagnoseDOM(webview, siteKey) {
         try {
           const diag = JSON.parse(raw);
           // 临时：写文件便于调试选择器
-          try { fs.writeFileSync(path.join(__dirname, `.diag-${siteKey}.json`), JSON.stringify(diag, null, 2), 'utf-8'); } catch(_) {}
+          ipcRenderer.send('write-debug-file', { name: `diag-${siteKey}.json`, data: JSON.stringify(diag, null, 2) });
           console.log(`%c[DOM诊断] ${siteKey}`, 'font-weight:bold;color:#00bcd4;');
           console.log('  class前缀(top30):', diag.classPrefixes.join(', '));
           console.log('  消息元素匹配:', diag.msgSamples);
@@ -612,106 +755,6 @@ function captureAll() {
   captureLatestQA(kimi, 'kimi', folder);
   captureLatestQA(doubao, 'doubao', folder);
   captureLatestQA(deepseek, 'deepseek', folder);
-}
-
-// ============ 回复完成检测 ============
-
-function watchReplyDone(webview, name, folder) {
-  const siteKey = getSiteKey(webview);
-  const config = SITE[siteKey];
-  if (!config) return;
-
-  webview.executeJavaScript(`
-    (function() {
-      if (window.__replyWatcher) return;
-      window.__replyWatcher = true;
-      window.__replySeenContent = false;
-      window.__replyTextLen = 0;
-      window.__replyStableCount = 0;
-
-      var timer = null;
-      var maxWait = setTimeout(function() {
-        // 超时兜底：有内容才截图
-        window.__replyDone = true;
-        window.__replyTimedOut = true;
-      }, 120000);
-
-      // 找聊天容器
-      var conv = null;
-      var convSels = ${JSON.stringify(config.chatContainer)};
-      for (var i = 0; i < convSels.length; i++) {
-        var c = document.querySelector(convSels[i]);
-        if (c) { conv = c; break; }
-      }
-      if (!conv) conv = document.body;
-
-      var observer = new MutationObserver(function() {
-        window.__replySeenContent = true;
-        clearTimeout(timer);
-        timer = setTimeout(function() {
-          ${config.stopTexts ? `var stopTexts = ${JSON.stringify(config.stopTexts)};
-          var bodyText = document.body.textContent;
-          for (var i = 0; i < stopTexts.length; i++) {
-            if (bodyText.indexOf(stopTexts[i]) !== -1) {
-              return; // 停止按钮还在，等下一次 mutation
-            }
-          }` : ''}
-          observer.disconnect();
-          clearTimeout(maxWait);
-          window.__replyDone = true;
-        }, 3000);
-      });
-      observer.observe(conv, { childList: true, subtree: true, characterData: true });
-    })();
-  `).catch(() => {});
-
-  // 轮询检测
-  let prevTextLen = -1;
-  let stableCount = 0;
-  let pollCount = 0;
-
-  const poll = setInterval(() => {
-    pollCount++;
-    // 超时兜底: 120s + 10s margin, 65 polls * 2s = 130s
-    if (pollCount > 65) {
-      clearInterval(poll);
-      webview.executeJavaScript('delete window.__replyDone; delete window.__replyWatcher; delete window.__replySeenContent;').catch(() => {});
-      return;
-    }
-
-    webview.executeJavaScript(`
-      JSON.stringify({
-        done: window.__replyDone === true,
-        timedOut: window.__replyTimedOut === true,
-        seenContent: window.__replySeenContent === true,
-        textLen: (document.querySelector('${config.chatContainer[0]}') || document.body).textContent.length
-      })
-    `).then(raw => {
-      const state = JSON.parse(raw);
-
-      // 确认有过内容输出
-      if (!state.seenContent && !state.timedOut) return;
-
-      // 文字长度稳定检测：连续 2 次不变
-      if (state.textLen === prevTextLen && state.textLen > 0) {
-        stableCount++;
-      } else {
-        stableCount = 0;
-      }
-      prevTextLen = state.textLen;
-
-      // 触发条件：done + 文字稳定
-      const done = state.done && stableCount >= 2;
-      // 或超时但有内容
-      const timedOutWithContent = state.timedOut && state.textLen > 0;
-
-      if (done || timedOutWithContent) {
-        clearInterval(poll);
-        webview.executeJavaScript('delete window.__replyDone; delete window.__replyTimedOut; delete window.__replyWatcher; delete window.__replySeenContent; delete window.__replyTextLen; delete window.__replyStableCount;').catch(() => {});
-        setTimeout(() => captureLatestQA(webview, name, folder), 1000);
-      }
-    }).catch(() => {});
-  }, 2000);
 }
 
 // ============ 事件绑定 ============
